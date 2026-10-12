@@ -24,4 +24,4 @@
 ## 만든 것들
 
 - 글꼴: 주아(Jua, 우아한형제들, SIL OFL 1.1) + DejaVu Sans 기호 → `글꼴_라이선스.txt`
-- 새 버전 만들기: `v1.0.1` 처럼 태그를 올리면 깃허브가 윈도우에서 exe 를 만들어 Releases 에 올려요
+- 새 버전 만들기: `magam_timer.py` 의 `APP_VER` 숫자를 올려서 main 에 올리면, 깃허브가 윈도우에서 exe 를 만들어 Releases 에 올려요

@@ -2,7 +2,8 @@ name: 타이머 만들기
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths-ignore: ['README.md', 'RELEASE_NOTES.md']
   workflow_dispatch:
 
 permissions:
@@ -17,6 +18,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: 버전 읽기
+        id: ver
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path magam_timer.py -Pattern 'APP_VER = "(.+)"').Matches[0].Groups[1].Value
+          "ver=$v" >> $env:GITHUB_OUTPUT
 
       - name: 도구 설치
         run: python -m pip install pyinstaller==6.11.1 pillow==11.0.0
@@ -67,10 +75,12 @@ jobs:
             MagamTimer_folder.zip
 
       - name: 다운로드 페이지에 올리기
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: 마감의 숲 집필 타이머 ${{ github.ref_name }}
+          tag_name: v${{ steps.ver.outputs.ver }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          name: 마감의 숲 집필 타이머 v${{ steps.ver.outputs.ver }}
           body_path: RELEASE_NOTES.md
           files: |
             dist/MagamTimer.exe

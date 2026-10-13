@@ -43,7 +43,7 @@ jobs:
         run: >
           pyinstaller --noconfirm --clean --onefile --windowed --noupx
           --name MagamTimer --icon icon.ico --version-file version_info.txt
-          --add-data "timer_bg;timer_bg" --add-data "RamilRound.ttf;." --add-data "GowunDodum-Regular.ttf;." --add-data "icon.png;."
+          --add-data "timer_bg;timer_bg" --add-data "RamilRound.ttf;." --add-data "icon.png;."
           magam_timer.py
 
       - name: exe 자가 점검
@@ -60,7 +60,7 @@ jobs:
           pyinstaller --noconfirm --onedir --windowed --noupx
           --distpath dist_folder --workpath build_folder
           --name MagamTimer --icon icon.ico --version-file version_info.txt
-          --add-data "timer_bg;timer_bg" --add-data "RamilRound.ttf;." --add-data "GowunDodum-Regular.ttf;." --add-data "icon.png;."
+          --add-data "timer_bg;timer_bg" --add-data "RamilRound.ttf;." --add-data "icon.png;."
           magam_timer.py
 
       - name: 폴더판 압축

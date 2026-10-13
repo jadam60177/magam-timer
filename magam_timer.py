@@ -14,14 +14,13 @@ import datetime as dt
 from pathlib import Path
 
 APP_NAME = "마감의 숲 집필 타이머"
-APP_VER = "1.1.5"
+APP_VER = "1.1.6"
 IS_WIN = sys.platform.startswith("win")
 
 # ── 경로 ─────────────────────────────────────────────
 RES_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 BG_DIR = RES_DIR / "timer_bg"
 FONT_FILE = RES_DIR / "RamilRound.ttf"
-FONT_BODY = RES_DIR / "GowunDodum-Regular.ttf"  # 원고 창 본문 글꼴 (마감의 숲 웹과 같은 고운돋움)
 ICON_PNG = RES_DIR / "icon.png"
 if os.environ.get("TIMER_DIR"):
     DATA_DIR = Path(os.environ["TIMER_DIR"])
@@ -97,7 +96,7 @@ if IS_WIN:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
-    for _ff in (FONT_FILE, FONT_BODY):
+    for _ff in (FONT_FILE,):
         if _ff.exists():
             try:  # 컴퓨터에 설치하지 않고 이 프로그램 안에서만 쓰기 (FR_PRIVATE)
                 gdi32.AddFontResourceExW(str(_ff), 0x10, None)
@@ -480,7 +479,7 @@ class TimerApp:
                                      "NanumGothic", "minikr", "TkDefaultFont"])
         self.round = self.f_ko.lower() == "ramilround"
         # 원고 창처럼 글을 많이 읽는 곳은 깔끔한 글꼴
-        self.f_clean = pick_font(root, ["Gowun Dodum", "Malgun Gothic", "맑은 고딕", "Noto Sans CJK KR",
+        self.f_clean = pick_font(root, ["Malgun Gothic", "맑은 고딕", "Noto Sans CJK KR",
                                         "NanumGothic", "minikr", "TkDefaultFont"])
 
         first_run = not SET_FILE.exists()
@@ -1350,9 +1349,10 @@ class SettingsWindow:
         w.resizable(False, False)
         w.attributes("-topmost", bool(app.set.get("topmost", True)))
         w.geometry(app.child_pos(470))
-        self.f = f = (app.f_ko, 11) if app.round else (app.f_ko, 9)
-        self.fb = fb = (app.f_ko, 13) if app.round else (app.f_ko, 10, "bold")
-        self.fs = fs = (app.f_ko, 10) if app.round else (app.f_ko, 8)
+        # 라밀: 주아로 통일하고 한 단계씩 크게
+        self.f = f = (app.f_ko, 13) if app.round else (app.f_ko, 11)
+        self.fb = fb = (app.f_ko, 15) if app.round else (app.f_ko, 12, "bold")
+        self.fs = fs = (app.f_ko, 12) if app.round else (app.f_ko, 10)
         st = app.set
         self.custom = [dict(c) for c in st.get("custom", [])]
 
@@ -1556,12 +1556,12 @@ class TidyWindow:
         w.resizable(False, False)
         w.attributes("-topmost", bool(app.set.get("topmost", True)))
         w.geometry(app.child_pos(720))
-        # 원고 창: 마감의 숲 웹처럼 제목은 주아, 내용은 고운돋움 (라밀: 맑은 고딕은 안 예쁨)
-        fc = app.f_clean
-        self.f = f = (fc, 12)
-        self.fb = fb = (app.f_ko, 16) if app.round else (fc, 14, "bold")
-        self.fs = fs = (fc, 11)
-        self.fl = fl = (fc, 12)  # 목록 글씨
+        # 원고 창: 주아로 통일, 한 단계씩 크게 (라밀: 맑은 고딕·고운돋움보다 주아가 나음)
+        fk = app.f_ko
+        self.f = f = (fk, 14) if app.round else (fk, 12)
+        self.fb = fb = (fk, 18) if app.round else (fk, 14, "bold")
+        self.fs = fs = (fk, 13) if app.round else (fk, 11)
+        self.fl = fl = (fk, 14) if app.round else (fk, 12)  # 목록 글씨
         HINT = "#c4b5bc"
         self.orig = ""
         self.cur = ""
@@ -1660,7 +1660,7 @@ class TidyWindow:
         return lb
 
     def button(self, parent, text, cmd, gold=False):
-        bf = (self.app.f_ko, 13) if self.app.round else (self.app.f_clean, 11, "bold")
+        bf = (self.app.f_ko, 15) if self.app.round else (self.app.f_ko, 12, "bold")
         kw = dict(text=text, font=bf, command=cmd, relief="flat",
                   bd=0, padx=self.app.S(14), pady=self.app.S(6), cursor="hand2")
         if gold:
@@ -1957,7 +1957,6 @@ def run_selftest(root, app):
         try:
             report["font"] = app.f_ko
             report["ramil_font_found"] = any(f.lower() == "ramilround" for f in tkfont.families(root))
-            report["body_font"] = app.f_clean
             report["backgrounds"] = app.bg_count
             report["last_input_tick"] = last_input_tick()
             report["cursor"] = cursor_pos()
@@ -1973,8 +1972,6 @@ def run_selftest(root, app):
             if IS_WIN:  # 윈도우에서는 이것들이 꼭 돼야 함
                 if not report["ramil_font_found"]:
                     report["errors"].append("둥근 글꼴을 못 불러옴")
-                if report["body_font"].lower() != "gowun dodum":
-                    report["errors"].append("고운돋움을 못 불러옴")
                 if report["backgrounds"] < 6:
                     report["errors"].append("배경 그림이 모자람")
                 if report["last_input_tick"] is None:

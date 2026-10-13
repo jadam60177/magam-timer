@@ -14,7 +14,7 @@ import datetime as dt
 from pathlib import Path
 
 APP_NAME = "마감의 숲 집필 타이머"
-APP_VER = "1.1.6"
+APP_VER = "1.1.7"
 IS_WIN = sys.platform.startswith("win")
 
 # ── 경로 ─────────────────────────────────────────────
@@ -1199,7 +1199,7 @@ class StatsWindow:
         self.win.configure(bg=self.BG)
         self.win.resizable(False, False)
         self.win.attributes("-topmost", bool(app.set.get("topmost", True)))
-        self.W, self.H = 560, 418
+        self.W, self.H = 620, 452
         self.win.geometry(f"{S(self.W)}x{S(self.H)}" + app.child_pos(self.H))
         self.range_days = 14
         self.metric = "chars" if DEMO and os.environ.get("TIMER_METRIC") == "chars" else "time"
@@ -1223,7 +1223,7 @@ class StatsWindow:
         return self.cv.create_polygon(pts, smooth=True, **kw)
 
     def t(self, x, y, s, size=9, color=C_TEXT, anchor="center"):
-        f = (self.app.f_ko, size + 2) if self.app.round else (self.app.f_ko, size)
+        f = (self.app.f_ko, size + 3) if self.app.round else (self.app.f_ko, size + 1)  # 라밀: 한 단계 더 크게
         return self.cv.create_text(self.app.S(x), self.app.S(y), text=s, font=f, fill=color, anchor=anchor)
 
     def btn(self, x, y, w, h, label, on, cmd):
@@ -1261,17 +1261,17 @@ class StatsWindow:
         cw = (self.W - 48 - 20) / 3
         for i, (name, ks, sub) in enumerate(cards):
             x = 24 + i * (cw + 10)
-            self.rr(x, 48, x + cw, 136, 14, fill=self.CARD, outline="")
-            self.t(x + 14, 64, name, 9, C_SUB, anchor="w")
-            self.t(x + 14, 87, fmt_hm(secs(ks)), 14, C_GOLD if i == 0 else C_TEXT, anchor="w")
-            self.t(x + 14, 107, fmt_man(chars(ks)), 10, "#e8d6c4", anchor="w")
-            self.t(x + 14, 124, sub, 8, "#b9a8ad", anchor="w")
+            self.rr(x, 50, x + cw, 150, 14, fill=self.CARD, outline="")
+            self.t(x + 14, 68, name, 9, C_SUB, anchor="w")
+            self.t(x + 14, 94, fmt_hm(secs(ks)), 14, C_GOLD if i == 0 else C_TEXT, anchor="w")
+            self.t(x + 14, 117, fmt_man(chars(ks)), 10, "#e8d6c4", anchor="w")
+            self.t(x + 14, 136, sub, 8, "#b9a8ad", anchor="w")
 
-        y0 = 146
-        self.btn(24, y0, 66, 24, "2주", self.range_days == 14, lambda: setattr(self, "range_days", 14))
-        self.btn(96, y0, 66, 24, "30일", self.range_days == 30, lambda: setattr(self, "range_days", 30))
-        self.btn(self.W - 24 - 140, y0, 66, 24, "시간", self.metric == "time", lambda: setattr(self, "metric", "time"))
-        self.btn(self.W - 24 - 66, y0, 66, 24, "글자 수", self.metric == "chars",
+        y0 = 162
+        self.btn(24, y0, 72, 28, "2주", self.range_days == 14, lambda: setattr(self, "range_days", 14))
+        self.btn(102, y0, 72, 28, "30일", self.range_days == 30, lambda: setattr(self, "range_days", 30))
+        self.btn(self.W - 24 - 158, y0, 72, 28, "시간", self.metric == "time", lambda: setattr(self, "metric", "time"))
+        self.btn(self.W - 24 - 80, y0, 80, 28, "글자 수", self.metric == "chars",
                  lambda: setattr(self, "metric", "chars"))
 
         n = self.range_days
@@ -1287,8 +1287,8 @@ class StatsWindow:
             lab = lambda v: (f"{v / 10000:.1f}만" if v >= 10000 else (f"{v / 1000:.1f}천" if v >= 1000 else str(int(v))))
             gname = f"목표 {gch:,}자"
         top = max(vals + [g, 0.001]) * 1.15
-        gx1, gx2, gy1, gy2 = 40, self.W - 24, y0 + 46, y0 + 198
-        self.rr(24, y0 + 34, self.W - 24, y0 + 224, 14, fill="#221c24", outline="")
+        gx1, gx2, gy1, gy2 = 40, self.W - 24, y0 + 54, y0 + 206
+        self.rr(24, y0 + 40, self.W - 24, y0 + 236, 14, fill="#221c24", outline="")
         slot = (gx2 - gx1) / n
         bw = slot * 0.62
         for i, (d, v) in enumerate(zip(ds, vals)):
@@ -1300,17 +1300,17 @@ class StatsWindow:
             if v > 0:
                 self.rr(cx - bw / 2, gy2 - max(hgt, 3), cx + bw / 2, gy2, min(5, bw / 2), fill=col, outline="")
             if n == 14 and v > 0:
-                self.t(cx, gy2 - hgt - 9, lab(v), 7, "#cbbcc2")
+                self.t(cx, gy2 - hgt - 10, lab(v), 7, "#cbbcc2")
             if n == 14 or i % 5 == (n - 1) % 5:
-                self.t(cx, gy2 + 11, f"{d.month}/{d.day}" if n == 30 else f"{d.day}", 7,
+                self.t(cx, gy2 + 12, f"{d.month}/{d.day}" if n == 30 else f"{d.day}", 7,
                        C_GOLD if is_today else C_MUTED)
                 if n == 14:
-                    self.t(cx, gy2 + 22, "월화수목금토일"[d.weekday()], 7, "#7d6f76")
+                    self.t(cx, gy2 + 25, "월화수목금토일"[d.weekday()], 7, "#7d6f76")
         if g > 0:
             gy = gy2 - (gy2 - gy1) * g / top
             for xx in range(int(gx1), int(gx2), 8):
                 cv.create_line(app.S(xx), app.S(gy), app.S(xx + 4), app.S(gy), fill="#d9b36a")
-            self.t(gx2 - 2, gy - 8, gname, 7, "#d9b36a", anchor="e")
+            self.t(gx2 - 2, gy - 10, gname, 7, "#d9b36a", anchor="e")
 
         w_ = [v for v in vals if v > 0]
         if w_:
@@ -1329,7 +1329,7 @@ class StatsWindow:
             s = "원고 창에서 '오늘 작업한 글자 수'의 '더하기'를 누르면 쌓여요!"
         else:
             s = "아직 기록이 없어요. 고른 프로그램에서 글을 쓰면 쌓여요!"
-        self.t(self.W / 2, y0 + 248, s, 8, C_SUB)
+        self.t(self.W / 2, y0 + 262, s, 8, C_SUB)
 
 
 # ══ 설정 창 ═══════════════════════════════════════════

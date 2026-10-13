@@ -1,3 +1,4 @@
+GowunDodum-Regular.ttf = 고운돋움(Gowun Dodum, 류양희) — SIL Open Font License 1.1 (아래 OFL 전문과 같은 조건)
 RamilRound.ttf = 주아(Jua, 우아한형제들) 글꼴에 기호 몇 개(DejaVu Sans)를 더해 이름을 바꾼 것이에요. 둘 다 무료로 고쳐 쓰고 함께 나눌 수 있는 글꼴이에요.
 
 ===== Jua — SIL Open Font License 1.1 =====

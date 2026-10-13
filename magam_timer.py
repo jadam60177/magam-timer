@@ -14,7 +14,7 @@ import datetime as dt
 from pathlib import Path
 
 APP_NAME = "마감의 숲 집필 타이머"
-APP_VER = "1.1.2"
+APP_VER = "1.1.3"
 IS_WIN = sys.platform.startswith("win")
 
 # ── 경로 ─────────────────────────────────────────────
@@ -1083,9 +1083,16 @@ class TimerApp:
         if what in ("chars", "all"):
             d["pieces"] = []
             d["chars_goal_done"] = False
+            # 원고 창에 불러온 글도 비우기 (다시 열 때 같은 글을 또 불러오지 않게 기억)
+            try:
+                self._cleared_clip = self.root.clipboard_get()
+            except tk.TclError:
+                self._cleared_clip = ""
         self.save_all()
         self.refresh()
         if self.tidy_win and self.tidy_win.winfo_exists() and getattr(self, "_last_tidy", None):
+            if what in ("chars", "all"):
+                self._last_tidy.clear_loaded()
             self._last_tidy.refresh_pieces()
 
     def on_close(self):
@@ -1693,8 +1700,19 @@ class TidyWindow:
         self.info.config(text=f"불러온 글  {sp:,}자 (공백 제외 {ns:,}자)   ·   첫 줄: {fl}")
         self.show_repeats()
 
+    def clear_loaded(self):
+        self.orig = self.cur = ""
+        self.info.config(text="비웠어요. 새 원고를 복사한 뒤 '복사한 글 불러오기'를 눌러 주세요")
+        self.rep_lb.delete(0, "end")
+        self.msg.config(text="")
+
     def load(self, quiet=False):
         t = self.read_clip()
+        if quiet and t and t == getattr(self.app, "_cleared_clip", None):
+            self.clear_loaded()  # 초기화로 비운 글은 저절로 다시 안 불러옴
+            return
+        if not quiet:
+            self.app._cleared_clip = None
         if not t.strip():
             self.info.config(text="복사한 글이 없어요. 한글에서 원고를 복사해 주세요")
             self.orig = self.cur = ""
@@ -1924,6 +1942,9 @@ def run_selftest(root, app):
             tw.add()
             report["tidy_result"] = root.clipboard_get()
             report["chars_today"] = app.day_chars(app.td)
+            app.do_reset("all")
+            if tw.cur or tw.rep_lb.size():
+                errors.append("초기화해도 원고 창이 안 비워짐")
             tw.close()
             app.reset_today()
             app._reset_win.destroy()
@@ -1993,6 +2014,8 @@ if __name__ == "__main__":
             root.clipboard_clear()
             root.clipboard_append(SAMPLE_TEXT * 3)
             app.open_tidy()
+            if os.environ.get("TIMER_THEN_RESET"):
+                root.after(600, lambda: app.do_reset("all"))
         root.after(300, _tidy)
     elif o == "picker":
         root.after(300, lambda: (app.open_settings(), root.after(300, lambda: WindowPicker(app._last_sw))))

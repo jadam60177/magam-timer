@@ -9,12 +9,12 @@
 """
 import tkinter as tk
 from tkinter import messagebox
-import time, json, os, sys, random, traceback
+import time, json, os, sys, random, traceback, re, collections
 import datetime as dt
 from pathlib import Path
 
 APP_NAME = "마감의 숲 집필 타이머"
-APP_VER = "1.0.0"
+APP_VER = "1.1.0"
 IS_WIN = sys.platform.startswith("win")
 
 # ── 경로 ─────────────────────────────────────────────
@@ -270,6 +270,9 @@ DEFAULTS = {
     "pos": None,
     "presets": {"hwp": True, "word": True, "notepad": False, "scrivener": False, "gdocs": False},
     "custom": [],  # [{"kind": "exe"|"title", "value": "..."}]
+    "char_basis": "sp",   # 글자 수 기준: sp 공백 포함 / ns 공백 제외
+    "goal_chars": 0,      # 하루 목표 글자 수 (0 이면 없음)
+    "tidy": {"blank": "keep", "quotes": True, "ellipsis": True, "ellipsis_to": "…", "trim": True},
 }
 
 # 색
@@ -330,6 +333,118 @@ def fmt_goal(hours):
     return f"{int(h)}시간 {int(round((h - int(h)) * 60))}분"
 
 
+# ── 원고 글 다루기 ────────────────────────────────────
+def norm_nl(t):
+    return t.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def count_chars(text):
+    """(공백 포함, 공백 제외) 글자 수. 줄바꿈은 어느 쪽에도 안 셈 (한글 문서 정보와 같은 방식)"""
+    t = norm_nl(text)
+    sp = len(t) - t.count("\n")
+    ns = len(re.sub(r"\s", "", t))
+    return sp, ns
+
+
+def first_line(text):
+    for line in norm_nl(text).split("\n"):
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def piece_key(text):
+    return re.sub(r"\s+", "", first_line(text))[:40]
+
+
+_OPEN_BEFORE = set(" \t\u3000([{<“‘「『—–-·…")
+
+
+def curly_quotes(line):
+    out = []
+    for i, ch in enumerate(line):
+        if ch in "\"'":
+            prev = line[i - 1] if i else " "
+            opening = i == 0 or prev in _OPEN_BEFORE
+            if ch == '"':
+                out.append("“" if opening else "”")
+            else:
+                out.append("‘" if opening else "’")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+_ELLIPSIS = re.compile(r"[.…⋯]*[…⋯][.…⋯]*|\.{2,}")
+
+
+def tidy_text(text, opt):
+    lines = norm_nl(text).split("\n")
+    if opt.get("trim"):
+        lines = [re.sub(r"(?<=\S)[ \t]{2,}", " ", l).rstrip() for l in lines]
+    if opt.get("quotes"):
+        lines = [curly_quotes(l) for l in lines]
+    if opt.get("ellipsis"):
+        to = opt.get("ellipsis_to", "…")
+        lines = [_ELLIPSIS.sub(to, l) for l in lines]
+    blank = opt.get("blank", "keep")
+    if blank == "remove":
+        lines = [l for l in lines if l.strip()]
+    elif blank == "add":
+        return "\n\n".join(l for l in lines if l.strip())
+    return "\n".join(lines)
+
+
+JOSA = sorted(["은", "는", "이", "가", "을", "를", "에", "의", "로", "와", "과", "도", "만", "랑", "께",
+               "으로", "에서", "에게", "한테", "께서", "까지", "부터", "처럼", "보다", "마저", "조차", "이나",
+               "이랑", "하고", "에는", "에도", "에서는", "에서도", "에게서", "으로는", "으로도", "으로써",
+               "으로서", "만큼", "밖에", "이라도", "라도", "이며", "이고"], key=len, reverse=True)
+
+
+def find_repeats(text):
+    """자주 나온 단어(조사만 다른 건 묶음)와 두 단어 표현"""
+    toks = re.findall(r"[가-힣]+|[A-Za-z]+", text)
+    raw = collections.Counter(t for t in toks if len(t) >= 2)
+    cands = {}
+    support = collections.defaultdict(set)
+    for t in raw:
+        cs = [t[:-len(j)] for j in JOSA if t.endswith(j) and len(t) - len(j) >= 2]
+        cands[t] = cs
+        for c in cs:
+            support[c].add(t)
+    stem_of = {}
+    for t, cs in cands.items():
+        stem_of[t] = t
+        for c in cs:
+            if c in raw or len(support[c]) >= 2:
+                stem_of[t] = c
+                break
+    words = collections.Counter()
+    forms = collections.defaultdict(collections.Counter)
+    for t, n in raw.items():
+        words[stem_of[t]] += n
+        forms[stem_of[t]][t] += n
+    w_list = [(w, n, forms[w].most_common(3)) for w, n in words.most_common(80) if n >= 3]
+    pairs = collections.Counter()
+    for chunk in re.split(r"[.!?…⋯\n“”\"‘’',;:()\[\]~]+", text):  # 문장·따옴표를 넘어가는 짝은 안 셈
+        ct = re.findall(r"[가-힣]+|[A-Za-z]+", chunk)
+        pairs.update(f"{a} {b}" for a, b in zip(ct, ct[1:]) if len(a) >= 2 and len(b) >= 2)
+    p_list = [(p, n) for p, n in pairs.most_common(60) if n >= 2]
+    return w_list, p_list
+
+
+def fmt_chars(n):
+    return f"{int(n):,}자"
+
+
+def fmt_man(n):
+    n = int(n)
+    if n < 10000:
+        return f"{n:,}자"
+    v = f"{n / 10000:.1f}".rstrip("0").rstrip(".")
+    return f"{v}만 자"
+
+
 def pick_font(root, cands):
     from tkinter import font as tkfont
     fams = {f.lower(): f for f in tkfont.families(root)}
@@ -368,6 +483,8 @@ class TimerApp:
         self.set.update(load_json(SET_FILE, {}))
         for k, v in DEFAULTS["presets"].items():
             self.set.setdefault("presets", {}).setdefault(k, v)
+        for k, v in DEFAULTS["tidy"].items():
+            self.set.setdefault("tidy", {}).setdefault(k, v)
         self.data = load_json(DATA_FILE, {"days": {}})
         self.data.setdefault("days", {})
 
@@ -383,6 +500,7 @@ class TimerApp:
         self.toast_text = ""
         self.stats_win = None
         self.set_win = None
+        self.tidy_win = None
 
         self.today = self.day_key()
         self.ensure_day(self.today)
@@ -425,6 +543,64 @@ class TimerApp:
     @property
     def td(self):
         return self.ensure_day(self.today)
+
+    def basis_name(self):
+        return "공백 포함" if self.set.get("char_basis", "sp") == "sp" else "공백 제외"
+
+    def day_chars(self, d, basis=None):
+        b = basis or self.set.get("char_basis", "sp")
+        return sum(int(p.get(b, 0)) for p in d.get("pieces", []))
+
+    def add_piece(self, text):
+        """오늘 쓴 글로 더하기. 같은 화(첫 줄이 같은 글)는 새 글자 수로 바꾸고,
+        전날 쓰던 화면 늘어난 만큼만 더함"""
+        sp, ns = count_chars(text)
+        key = piece_key(text)
+        if not key or sp == 0:
+            return None
+        b = self.set.get("char_basis", "sp")
+        cutoff = (dt.datetime.strptime(self.today, "%Y-%m-%d") - dt.timedelta(days=60)).strftime("%Y-%m-%d")
+        prev = None
+        for k in sorted(self.data["days"]):
+            if k >= self.today or k < cutoff:
+                continue
+            for p in self.data["days"][k].get("pieces", []):
+                if p.get("key") == key:
+                    prev = p
+        psp = int(prev.get("total_sp", 0)) if prev else 0
+        pns = int(prev.get("total_ns", 0)) if prev else 0
+        rec = {"key": key, "head": first_line(text)[:24], "total_sp": sp, "total_ns": ns,
+               "sp": max(0, sp - psp), "ns": max(0, ns - pns), "t": int(time.time())}
+        pieces = self.td.setdefault("pieces", [])
+        old = None
+        for i, p in enumerate(pieces):
+            if p.get("key") == key:
+                old = p
+                pieces[i] = rec
+                break
+        else:
+            pieces.append(rec)
+        kind = "update" if old else ("cont" if prev else "new")
+        self.save_all()
+        self.refresh()
+        if old:
+            before = int(old.get(b, 0))
+        elif prev:
+            before = int(prev.get("total_" + b, 0))
+        else:
+            before = 0
+        return kind, rec, before
+
+    def remove_piece(self, idx):
+        pieces = self.td.get("pieces", [])
+        if 0 <= idx < len(pieces):
+            del pieces[idx]
+            d = self.td
+            g = int(self.set.get("goal_chars", 0) or 0)
+            if g and self.day_chars(d) < g:
+                d["chars_goal_done"] = False
+            self.save_all()
+            self.refresh()
 
     def save_all(self):
         save_json(DATA_FILE, self.data)
@@ -691,6 +867,7 @@ class TimerApp:
             self.pause_tid = None
         else:
             self.t_clock = self.text(16, 21, "", 12, self.P["sub"], anchor="w")
+            self.pill(w - 209, 21, 52, 28, "원고", self.open_tidy, 11)
             self.pill(w - 152, 21, 52, 28, "통계", self.open_stats, 11)
             self.pill(w - 95, 21, 52, 28, "설정", self.open_settings, 11)
             self.pill(w - 38, 21, 52, 28, "작게", self.toggle_mini, 11)
@@ -772,21 +949,29 @@ class TimerApp:
         ph = PHASE_BY_KEY[phase_of(now.hour)[1]]
         self.set_text(self.t_clock, f"{ph[3]} {ph[2]}  {now:%H:%M}")
         self.set_time(self.t_time, fmt_hms(sec), col if self.is_running else self.P["stopped"])
+        chars = self.day_chars(d)
+        gch = int(self.set.get("goal_chars", 0) or 0)
         if mini:
             if self.toast_text and time.time() < self.toast_until:
                 self.set_text(self.t_status, self.toast_text, self.P["goal_done"])
             else:
-                pct = f" · 목표 {int(ratio * 100)}%" if goal > 0 else ""
-                self.set_text(self.t_status, f"{short}{pct}", col if self.is_typing else self.P["sub"])
+                pct = f" · {int(ratio * 100)}%" if goal > 0 else ""
+                cs = f" · {fmt_man(chars)}" if chars else ""
+                self.set_text(self.t_status, f"{short}{pct}{cs}", col if self.is_typing else self.P["sub"])
         else:
             self.set_text(self.t_status, st, col)
             if goal > 0:
-                g = f"오늘 목표 {fmt_goal(self.set['goal_hours'])} · {int(ratio * 100)}%"
+                g = f"목표 {fmt_goal(self.set['goal_hours'])} · {int(ratio * 100)}%"
                 if done:
-                    g = f"오늘 목표 {fmt_goal(self.set['goal_hours'])} 달성 ★"
+                    g = f"목표 {fmt_goal(self.set['goal_hours'])} 달성 ★"
             else:
-                g = "오늘 목표 없음"
-            self.set_text(self.t_goal, g, self.P["goal_done"] if done else self.P["sub"])
+                g = ""
+            if gch:
+                c = f"{chars:,} / {gch:,}자" + (" ★" if chars >= gch else "")
+            else:
+                c = fmt_chars(chars) if chars else ""
+            line = "   ·   ".join(x for x in (g, c) if x) or "오늘 목표 없음"
+            self.set_text(self.t_goal, line, self.P["goal_done"] if done else self.P["sub"])
             if self.toast_items and time.time() >= self.toast_until:
                 self.hide_toast()
         self.draw_bar(ratio, self.P["gold"] if done else (self.P["typing"] if self.is_typing else self.P["bar_idle"]))
@@ -829,6 +1014,13 @@ class TimerApp:
             self.ding()
             self.save_all()
 
+        gch = int(self.set.get("goal_chars", 0) or 0)
+        if gch and self.day_chars(d) >= gch and not d.get("chars_goal_done"):
+            d["chars_goal_done"] = True
+            self.show_toast(f"오늘 목표 {gch:,}자 달성! 대단해요 ★", 12)
+            self.ding()
+            self.save_all()
+
         nowdt = dt.datetime.now()
         auto_now = phase_of(nowdt.hour)[1]
         if auto_now != self.last_auto_phase:
@@ -842,7 +1034,9 @@ class TimerApp:
             if self.set.get("hourly", True):
                 p = PHASE_BY_KEY[auto_now]
                 h12 = nowdt.hour % 12 or 12
-                self.show_toast(f"{p[3]} {p[2]} {h12}시예요 · 오늘 {fmt_hm(self.td['sec'])} 썼어요", 8)
+                ch = self.day_chars(self.td)
+                more = f" · {fmt_man(ch)}" if ch else " 썼어요"
+                self.show_toast(f"{p[3]} {p[2]} {h12}시예요 · 오늘 {fmt_hm(self.td['sec'])}{more}", 8)
         want = self.wanted_phase()
         if want != self.cur_phase and not self.fade:
             self.start_fade(want)
@@ -894,6 +1088,12 @@ class TimerApp:
             return
         StatsWindow(self)
 
+    def open_tidy(self):
+        if self.tidy_win and self.tidy_win.winfo_exists():
+            self.tidy_win.lift()
+            return
+        TidyWindow(self)
+
     def open_settings(self):
         if self.set_win and self.set_win.winfo_exists():
             self.set_win.lift()
@@ -909,8 +1109,14 @@ class TimerApp:
             if random.random() < 0.12:
                 continue
             s = random.uniform(1.2, 5.2) * 3600
-            self.data["days"][k] = {"sec": s, "goal_done": s > 3 * 3600}
-        self.data["days"][self.today] = {"sec": 2 * 3600 + 13 * 60 + 41, "goal_done": False}
+            c = int(s / 3600 * random.uniform(3500, 6000))
+            self.data["days"][k] = {"sec": s, "goal_done": s > 3 * 3600,
+                                    "pieces": [{"key": f"d{i}", "head": "", "sp": c, "ns": int(c * .78),
+                                                "total_sp": c, "total_ns": int(c * .78)}]}
+        self.data["days"][self.today] = {"sec": 2 * 3600 + 13 * 60 + 41, "goal_done": False, "pieces": [
+            {"key": "11화.", "head": "11화. 비 오는 밤의 손님", "sp": 5234, "ns": 4102, "total_sp": 5234, "total_ns": 4102},
+            {"key": "12화.", "head": "12화. 젖은 우산", "sp": 7106, "ns": 5530, "total_sp": 7106, "total_ns": 5530}]}
+        self.set["goal_chars"] = 20000
         self.is_typing = True
         self.set["custom"] = [{"kind": "title", "value": "조아라"}]
         ph = os.environ.get("TIMER_PHASE")
@@ -939,9 +1145,10 @@ class StatsWindow:
         self.win.configure(bg=self.BG)
         self.win.resizable(False, False)
         self.win.attributes("-topmost", bool(app.set.get("topmost", True)))
-        self.W, self.H = 560, 400
+        self.W, self.H = 560, 418
         self.win.geometry(f"{S(self.W)}x{S(self.H)}" + app.child_pos(self.H))
         self.range_days = 14
+        self.metric = "chars" if DEMO and os.environ.get("TIMER_METRIC") == "chars" else "time"
         self.cv = tk.Canvas(self.win, bg=self.BG, highlightthickness=0, width=S(self.W), height=S(self.H))
         self.cv.pack(fill="both", expand=True)
         self.draw()
@@ -983,69 +1190,92 @@ class StatsWindow:
         days = app.data["days"]
         key = lambda d: d.strftime("%Y-%m-%d")
         secs = lambda ks: sum(days.get(k, {}).get("sec", 0) for k in ks)
-        worked = lambda ks: sum(1 for k in ks if days.get(k, {}).get("sec", 0) >= 60)
+        chars = lambda ks: sum(app.day_chars(days.get(k, {})) for k in ks)
+        worked = lambda ks: sum(1 for k in ks if days.get(k, {}).get("sec", 0) >= 60 or app.day_chars(days.get(k, {})))
 
         week = [key(today - dt.timedelta(days=i)) for i in range(today.weekday() + 1)]
         month = [key(today.replace(day=i)) for i in range(1, today.day + 1)]
         goal = float(app.set.get("goal_hours", 0))
+        gch = int(app.set.get("goal_chars", 0) or 0)
         tsec = secs([app.today])
         sub_today = f"목표의 {int(tsec / (goal * 3600) * 100)}%" if goal > 0 else "목표 없음"
-        cards = [("오늘", tsec, sub_today), ("이번 주", secs(week), f"작업한 날 {worked(week)}일"),
-                 (f"{today.month}월", secs(month), f"작업한 날 {worked(month)}일")]
+        cards = [("오늘", [app.today], sub_today), ("이번 주", week, f"작업한 날 {worked(week)}일"),
+                 (f"{today.month}월", month, f"작업한 날 {worked(month)}일")]
         self.t(24, 26, "집필 기록", 13, C_TEXT, anchor="w")
-        self.t(self.W - 24, 28, f"하루는 {app.set['day_start']}시에 바뀌어요", 8, "#8f7f86", anchor="e")
+        self.t(self.W - 24, 28, f"글자 수는 {app.basis_name()} · 하루는 {app.set['day_start']}시에 바뀌어요", 8,
+               "#8f7f86", anchor="e")
         cw = (self.W - 48 - 20) / 3
-        for i, (name, sec, sub) in enumerate(cards):
+        for i, (name, ks, sub) in enumerate(cards):
             x = 24 + i * (cw + 10)
-            self.rr(x, 48, x + cw, 118, 14, fill=self.CARD, outline="")
+            self.rr(x, 48, x + cw, 136, 14, fill=self.CARD, outline="")
             self.t(x + 14, 64, name, 9, C_SUB, anchor="w")
-            self.t(x + 14, 87, fmt_hm(sec), 14, C_GOLD if i == 0 else C_TEXT, anchor="w")
-            self.t(x + 14, 106, sub, 9, "#b9a8ad", anchor="w")
+            self.t(x + 14, 87, fmt_hm(secs(ks)), 14, C_GOLD if i == 0 else C_TEXT, anchor="w")
+            self.t(x + 14, 107, fmt_man(chars(ks)), 10, "#e8d6c4", anchor="w")
+            self.t(x + 14, 124, sub, 8, "#b9a8ad", anchor="w")
 
-        self.btn(24, 132, 66, 24, "2주", self.range_days == 14, lambda: setattr(self, "range_days", 14))
-        self.btn(96, 132, 66, 24, "30일", self.range_days == 30, lambda: setattr(self, "range_days", 30))
+        y0 = 146
+        self.btn(24, y0, 66, 24, "2주", self.range_days == 14, lambda: setattr(self, "range_days", 14))
+        self.btn(96, y0, 66, 24, "30일", self.range_days == 30, lambda: setattr(self, "range_days", 30))
+        self.btn(self.W - 24 - 140, y0, 66, 24, "시간", self.metric == "time", lambda: setattr(self, "metric", "time"))
+        self.btn(self.W - 24 - 66, y0, 66, 24, "글자 수", self.metric == "chars",
+                 lambda: setattr(self, "metric", "chars"))
 
         n = self.range_days
         ds = [today - dt.timedelta(days=n - 1 - i) for i in range(n)]
-        vals = [days.get(key(d), {}).get("sec", 0) / 3600 for d in ds]
-        top = max(vals + [goal, 0.001]) * 1.15
-        gx1, gx2, gy1, gy2 = 40, self.W - 24, 178, 330
-        self.rr(24, 166, self.W - 24, 356, 14, fill="#221c24", outline="")
+        if self.metric == "time":
+            vals = [days.get(key(d), {}).get("sec", 0) / 3600 for d in ds]
+            g = goal
+            lab = lambda v: f"{v:.1f}"
+            gname = f"목표 {fmt_goal(goal)}"
+        else:
+            vals = [app.day_chars(days.get(key(d), {})) for d in ds]
+            g = gch
+            lab = lambda v: (f"{v / 10000:.1f}만" if v >= 10000 else (f"{v / 1000:.1f}천" if v >= 1000 else str(int(v))))
+            gname = f"목표 {gch:,}자"
+        top = max(vals + [g, 0.001]) * 1.15
+        gx1, gx2, gy1, gy2 = 40, self.W - 24, y0 + 46, y0 + 198
+        self.rr(24, y0 + 34, self.W - 24, y0 + 224, 14, fill="#221c24", outline="")
         slot = (gx2 - gx1) / n
         bw = slot * 0.62
         for i, (d, v) in enumerate(zip(ds, vals)):
             cx = gx1 + slot * (i + 0.5)
             hgt = (gy2 - gy1) * v / top
             is_today = key(d) == app.today
-            hit = goal > 0 and v >= goal
+            hit = g > 0 and v >= g
             col = C_GOLD if is_today else ("#A8D8B9" if hit else "#8e7a9a")
             if v > 0:
                 self.rr(cx - bw / 2, gy2 - max(hgt, 3), cx + bw / 2, gy2, min(5, bw / 2), fill=col, outline="")
             if n == 14 and v > 0:
-                self.t(cx, gy2 - hgt - 9, f"{v:.1f}", 7, "#cbbcc2")
+                self.t(cx, gy2 - hgt - 9, lab(v), 7, "#cbbcc2")
             if n == 14 or i % 5 == (n - 1) % 5:
                 self.t(cx, gy2 + 11, f"{d.month}/{d.day}" if n == 30 else f"{d.day}", 7,
                        C_GOLD if is_today else C_MUTED)
                 if n == 14:
                     self.t(cx, gy2 + 22, "월화수목금토일"[d.weekday()], 7, "#7d6f76")
-        if goal > 0:
-            gy = gy2 - (gy2 - gy1) * goal / top
+        if g > 0:
+            gy = gy2 - (gy2 - gy1) * g / top
             for xx in range(int(gx1), int(gx2), 8):
                 cv.create_line(app.S(xx), app.S(gy), app.S(xx + 4), app.S(gy), fill="#d9b36a")
-            self.t(gx2 - 2, gy - 8, f"목표 {fmt_goal(goal)}", 7, "#d9b36a", anchor="e")
+            self.t(gx2 - 2, gy - 8, gname, 7, "#d9b36a", anchor="e")
 
         w_ = [v for v in vals if v > 0]
         if w_:
             avg = sum(w_) / len(w_)
             bi = max(range(n), key=lambda i: vals[i])
             bd = ds[bi]
-            s = (f"작업한 날 {len(w_)}일 · 하루 평균 {fmt_hm(avg * 3600)} · "
-                 f"가장 많이 한 날 {bd.month}/{bd.day} ({fmt_hm(vals[bi] * 3600)})")
-            if goal > 0:
-                s += f" · 목표 달성 {sum(1 for v in vals if v >= goal)}일"
+            if self.metric == "time":
+                s = (f"작업한 날 {len(w_)}일 · 하루 평균 {fmt_hm(avg * 3600)} · "
+                     f"가장 많이 한 날 {bd.month}/{bd.day} ({fmt_hm(vals[bi] * 3600)})")
+            else:
+                s = (f"글 쓴 날 {len(w_)}일 · 하루 평균 {fmt_man(avg)} · "
+                     f"가장 많이 쓴 날 {bd.month}/{bd.day} ({fmt_man(vals[bi])})")
+            if g > 0:
+                s += f" · 목표 달성 {sum(1 for v in vals if v >= g)}일"
+        elif self.metric == "chars":
+            s = "원고 창에서 '오늘 쓴 글로 더하기'를 누르면 글자 수가 쌓여요!"
         else:
             s = "아직 기록이 없어요. 고른 프로그램에서 글을 쓰면 쌓여요!"
-        self.t(self.W / 2, 376, s, 8, C_SUB)
+        self.t(self.W / 2, y0 + 248, s, 8, C_SUB)
 
 
 # ══ 설정 창 ═══════════════════════════════════════════
@@ -1115,13 +1345,17 @@ class SettingsWindow:
         self.phase_names = names
         self.v_phase = tk.StringVar(value=names.get(st["phase_mode"], names["auto"]))
 
-        def row(r, title, sub, var=None, a=0, b=0, inc=1, unit=""):
+        self.v_gch = tk.IntVar(value=int(st.get("goal_chars", 0) or 0))
+        self.basis_names = {"sp": "공백 포함", "ns": "공백 제외"}
+        self.v_basis = tk.StringVar(value=self.basis_names.get(st.get("char_basis", "sp"), "공백 포함"))
+
+        def row(r, title, sub, var=None, a=0, b=0, inc=1, unit="", width=5):
             tk.Label(right, text=title, font=fb, bg=self.BG, fg=C_TEXT).grid(row=r, column=0, sticky="w",
                                                                            pady=(S(6) if r else 0, 0))
             if var is not None:
                 fr = tk.Frame(right, bg=self.BG)
                 fr.grid(row=r, column=1, sticky="e", pady=(S(6) if r else 0, 0))
-                tk.Spinbox(fr, from_=a, to=b, increment=inc, textvariable=var, width=5, font=f, justify="center",
+                tk.Spinbox(fr, from_=a, to=b, increment=inc, textvariable=var, width=width, font=f, justify="center",
                            bg=self.FIELD, fg=C_TEXT, buttonbackground="#3a3038", insertbackground=C_TEXT,
                            relief="flat").pack(side="left")
                 tk.Label(fr, text=unit, font=f, bg=self.BG, fg=C_SUB).pack(side="left", padx=(S(4), 0))
@@ -1129,23 +1363,30 @@ class SettingsWindow:
                 tk.Label(right, text=sub, font=fs, bg=self.BG, fg=C_MUTED).grid(row=r + 1, column=0, columnspan=2,
                                                                                 sticky="w")
 
-        row(0, "하루 목표 시간", "0 으로 두면 목표 없이 써요", self.v_goal, 0, 16, 0.5, "시간")
-        row(2, "멈춤 판정", "입력이 멈추고 이만큼 지나면 시간이 멈춰요", self.v_idle, 1, 30, 1, "초")
-        row(4, "하루가 바뀌는 시각", "이 시각 전까지는 전날 기록으로 쳐요 (밤샘용)", self.v_day, 0, 12, 1, "시")
-        row(6, "배경 시간대", None)
+        row(0, "하루 목표 시간", None, self.v_goal, 0, 16, 0.5, "시간")
+        row(1, "하루 목표 글자 수", "0 으로 두면 목표 없이 써요", self.v_gch, 0, 200000, 1000, "자", width=7)
+        row(3, "글자 수 세는 기준", None)
+        omb = tk.OptionMenu(right, self.v_basis, *self.basis_names.values())
+        omb.config(font=f, bg=self.FIELD, fg=C_TEXT, activebackground="#3a3038", activeforeground=C_TEXT,
+                   relief="flat", highlightthickness=0, width=10)
+        omb["menu"].config(font=f, bg=self.FIELD, fg=C_TEXT)
+        omb.grid(row=3, column=1, sticky="e", pady=(S(6), 0))
+        row(4, "멈춤 판정", "입력이 멈추고 이만큼 지나면 시간이 멈춰요", self.v_idle, 1, 30, 1, "초")
+        row(6, "하루가 바뀌는 시각", "이 시각 전까지는 전날 기록으로 쳐요 (밤샘용)", self.v_day, 0, 12, 1, "시")
+        row(8, "배경 시간대", None)
         om = tk.OptionMenu(right, self.v_phase, *names.values())
         om.config(font=f, bg=self.FIELD, fg=C_TEXT, activebackground="#3a3038", activeforeground=C_TEXT,
                   relief="flat", highlightthickness=0, width=16)
         om["menu"].config(font=f, bg=self.FIELD, fg=C_TEXT)
-        om.grid(row=6, column=1, sticky="e", pady=(S(6), 0))
-        row(7, "창 투명도", None)
+        om.grid(row=8, column=1, sticky="e", pady=(S(6), 0))
+        row(9, "창 투명도", None)
         tk.Scale(right, from_=40, to=100, orient="horizontal", variable=self.v_alpha, showvalue=True,
                  length=S(140), bg=self.BG, fg=C_SUB, troughcolor=self.FIELD, highlightthickness=0, font=fs,
-                 command=lambda v: app.root.attributes("-alpha", int(v) / 100)).grid(row=7, column=1, sticky="e")
+                 command=lambda v: app.root.attributes("-alpha", int(v) / 100)).grid(row=9, column=1, sticky="e")
         for i, (txt, var) in enumerate([("항상 다른 창 위에 띄우기", self.v_top),
                                         ("시간대가 바뀌거나 목표를 채우면 알림 소리", self.v_sound),
                                         ("정시마다 지금 시각 알려 주기", self.v_hourly)]):
-            tk.Checkbutton(right, text=txt, variable=var, **cb).grid(row=8 + i, column=0, columnspan=2, sticky="w",
+            tk.Checkbutton(right, text=txt, variable=var, **cb).grid(row=10 + i, column=0, columnspan=2, sticky="w",
                                                                      pady=(S(8) if i == 0 else 0, 0))
 
         # ── 아래 버튼
@@ -1210,6 +1451,7 @@ class SettingsWindow:
             st["goal_hours"] = max(0.0, min(16.0, float(self.v_goal.get())))
             st["idle"] = max(1.0, min(30.0, float(self.v_idle.get())))
             st["day_start"] = max(0, min(12, int(self.v_day.get())))
+            st["goal_chars"] = max(0, min(200000, int(float(self.v_gch.get()))))
         except (ValueError, tk.TclError):
             messagebox.showwarning("타이머 설정", "숫자를 확인해 주세요", parent=self.win)
             return
@@ -1217,6 +1459,7 @@ class SettingsWindow:
         st["topmost"] = bool(self.v_top.get())
         st["sound"] = bool(self.v_sound.get())
         st["hourly"] = bool(self.v_hourly.get())
+        st["char_basis"] = {v: k for k, v in self.basis_names.items()}.get(self.v_basis.get(), "sp")
         st["presets"] = {k: bool(v.get()) for k, v in self.v_pre.items()}
         st["custom"] = self.custom
         inv = {v: k for k, v in self.phase_names.items()}
@@ -1227,6 +1470,8 @@ class SettingsWindow:
         goal = st["goal_hours"] * 3600
         if goal > 0 and d["sec"] < goal:
             d["goal_done"] = False
+        if st["goal_chars"] and app.day_chars(d) < st["goal_chars"]:
+            d["chars_goal_done"] = False
         app.hide_toast()
         app.remember_pos()
         app.apply_window_settings()
@@ -1236,6 +1481,246 @@ class SettingsWindow:
 
     def cancel(self):
         self.app.root.attributes("-alpha", max(0.3, self.app.set.get("alpha", 100) / 100))
+        self.win.destroy()
+
+
+# ══ 원고 정리 창 ═════════════════════════════════════
+class TidyWindow:
+    BG = "#1d1820"
+    FIELD = "#2a2229"
+
+    def __init__(self, app):
+        self.app = app
+        S = app.S
+        w = tk.Toplevel(app.root)
+        self.win = w
+        app.tidy_win = w
+        app._last_tidy = self
+        w.title("원고 정리")
+        w.configure(bg=self.BG, padx=S(18), pady=S(14))
+        w.resizable(False, False)
+        w.attributes("-topmost", bool(app.set.get("topmost", True)))
+        w.geometry(app.child_pos(560))
+        self.f = f = (app.f_ko, 11) if app.round else (app.f_ko, 9)
+        self.fb = fb = (app.f_ko, 13) if app.round else (app.f_ko, 10, "bold")
+        self.fs = fs = (app.f_ko, 10) if app.round else (app.f_ko, 8)
+        self.orig = ""
+        self.cur = ""
+        to = app.set.get("tidy", {})
+        lab = dict(bg=self.BG)
+        cb = dict(bg=self.BG, fg=C_TEXT, selectcolor=self.FIELD, activebackground=self.BG,
+                  activeforeground=C_TEXT, font=f, anchor="w", highlightthickness=0, bd=0)
+
+        top = tk.Frame(w, **lab)
+        top.grid(row=0, column=0, columnspan=3, sticky="ew")
+        tk.Label(top, text="원고 정리", font=fb, fg=C_TEXT, **lab).pack(side="left")
+        self.button(top, "복사한 글 불러오기", self.load, gold=True).pack(side="right")
+        tk.Label(w, text="한글에서 Ctrl+A → Ctrl+C 로 원고를 복사한 뒤 '복사한 글 불러오기'를 눌러 주세요",
+                 font=fs, fg=C_MUTED, **lab).grid(row=1, column=0, columnspan=3, sticky="w")
+        self.info = tk.Label(w, text="", font=f, fg=C_GOLD, anchor="w", justify="left", **lab)
+        self.info.grid(row=2, column=0, columnspan=3, sticky="w", pady=(S(6), S(4)))
+
+        # 왼쪽: 정리하기
+        left = tk.Frame(w, **lab)
+        left.grid(row=3, column=0, sticky="nw")
+        tk.Frame(w, bg="#3a3038", width=1).grid(row=3, column=1, sticky="ns", padx=S(14))
+        right = tk.Frame(w, **lab)
+        right.grid(row=3, column=2, sticky="nw")
+
+        tk.Label(left, text="정리하기", font=fb, fg=C_TEXT, **lab).pack(anchor="w")
+        tk.Label(left, text="빈 줄", font=f, fg=C_SUB, **lab).pack(anchor="w", pady=(S(4), 0))
+        self.v_blank = tk.StringVar(value=to.get("blank", "keep"))
+        rb = dict(cb)
+        for val, txt in (("keep", "그대로 두기"), ("remove", "빈 줄 모두 빼기"), ("add", "문단 사이에 빈 줄 한 줄씩")):
+            tk.Radiobutton(left, text=txt, variable=self.v_blank, value=val, **rb).pack(anchor="w", padx=(S(8), 0))
+        self.v_quotes = tk.BooleanVar(value=to.get("quotes", True))
+        self.v_ell = tk.BooleanVar(value=to.get("ellipsis", True))
+        self.v_ell_to = tk.StringVar(value=to.get("ellipsis_to", "…"))
+        self.v_trim = tk.BooleanVar(value=to.get("trim", True))
+        tk.Checkbutton(left, text='둥근 따옴표로 바꾸기  ( "말" → “말” )', variable=self.v_quotes, **cb).pack(
+            anchor="w", pady=(S(8), 0))
+        er = tk.Frame(left, **lab)
+        er.pack(anchor="w")
+        tk.Checkbutton(er, text="말줄임표 통일 →", variable=self.v_ell, **cb).pack(side="left")
+        om = tk.OptionMenu(er, self.v_ell_to, "…", "……", "...")
+        om.config(font=f, bg=self.FIELD, fg=C_TEXT, activebackground="#3a3038", activeforeground=C_TEXT,
+                  relief="flat", highlightthickness=0, width=4)
+        om["menu"].config(font=f, bg=self.FIELD, fg=C_TEXT)
+        om.pack(side="left", padx=(S(6), 0))
+        tk.Checkbutton(left, text="줄 끝 공백 · 겹친 띄어쓰기 정리", variable=self.v_trim, **cb).pack(anchor="w")
+        bf = tk.Frame(left, **lab)
+        bf.pack(anchor="w", pady=(S(10), 0))
+        self.button(bf, "정리해서 복사", self.do_tidy, gold=True).pack(side="left")
+        self.button(bf, "원래 글로 되돌리기", self.revert).pack(side="left", padx=(S(6), 0))
+        self.msg = tk.Label(left, text="", font=fs, fg=C_TYPING, anchor="w", justify="left", wraplength=S(300), **lab)
+        self.msg.pack(anchor="w", pady=(S(6), 0))
+
+        # 오른쪽: 반복 단어
+        tk.Label(right, text="반복 단어", font=fb, fg=C_TEXT, **lab).pack(anchor="w")
+        rr = tk.Frame(right, **lab)
+        rr.pack(anchor="w", pady=(S(2), S(4)))
+        self.v_rep = tk.StringVar(value="word")
+        tk.Radiobutton(rr, text="단어", variable=self.v_rep, value="word", command=self.show_repeats, **rb).pack(side="left")
+        tk.Radiobutton(rr, text="두 단어 표현", variable=self.v_rep, value="pair", command=self.show_repeats,
+                       **rb).pack(side="left", padx=(S(10), 0))
+        self.rep_lb = tk.Listbox(right, height=11, width=34, font=fs, bg=self.FIELD, fg=C_TEXT, relief="flat",
+                                 highlightthickness=0, selectbackground="#4a3d44", activestyle="none")
+        self.rep_lb.pack(anchor="w")
+        tk.Label(right, text="조사만 다른 말(고개를·고개가)은 하나로 묶어요", font=fs, fg=C_MUTED, **lab).pack(anchor="w")
+
+        # 아래: 오늘 쓴 글
+        tk.Frame(w, bg="#3a3038", height=1).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(S(12), S(8)))
+        bot = tk.Frame(w, **lab)
+        bot.grid(row=5, column=0, columnspan=3, sticky="ew")
+        head = tk.Frame(bot, **lab)
+        head.pack(fill="x")
+        tk.Label(head, text="오늘 쓴 글", font=fb, fg=C_TEXT, **lab).pack(side="left")
+        self.total = tk.Label(head, text="", font=f, fg=C_GOLD, **lab)
+        self.total.pack(side="left", padx=(S(10), 0))
+        self.button(head, "빼기", self.remove).pack(side="right")
+        self.button(head, "오늘 쓴 글로 더하기", self.add, gold=True).pack(side="right", padx=(0, S(6)))
+        self.pc_lb = tk.Listbox(bot, height=4, font=fs, bg=self.FIELD, fg=C_TEXT, relief="flat",
+                                highlightthickness=0, selectbackground="#4a3d44", activestyle="none")
+        self.pc_lb.pack(fill="x", pady=(S(6), 0))
+        self.msg2 = tk.Label(bot, text="같은 화를 고쳐서 다시 더하면 두 번 세지 않고 새 글자 수로 바꿔요 (첫 줄로 알아봐요)",
+                             font=fs, fg=C_MUTED, anchor="w", **lab)
+        self.msg2.pack(anchor="w", pady=(S(4), 0))
+        w.protocol("WM_DELETE_WINDOW", self.close)
+        self.refresh_pieces()
+        self.load(quiet=True)
+
+    def button(self, parent, text, cmd, gold=False):
+        kw = dict(text=text, font=self.fb if gold and self.app.round else self.f, command=cmd, relief="flat",
+                  bd=0, padx=self.app.S(10), pady=self.app.S(3), cursor="hand2")
+        if gold:
+            kw.update(bg=C_GOLD, fg="#3a2a1c", activebackground="#ffe2a3", activeforeground="#3a2a1c")
+        else:
+            kw.update(bg="#3a3038", fg=C_TEXT, activebackground="#4a3d44", activeforeground=C_TEXT)
+        return tk.Button(parent, **kw)
+
+    def opts(self):
+        o = {"blank": self.v_blank.get(), "quotes": bool(self.v_quotes.get()), "ellipsis": bool(self.v_ell.get()),
+             "ellipsis_to": self.v_ell_to.get(), "trim": bool(self.v_trim.get())}
+        self.app.set["tidy"] = o
+        return o
+
+    def read_clip(self):
+        try:
+            return self.app.root.clipboard_get()
+        except tk.TclError:
+            return ""
+
+    def write_clip(self, text):
+        r = self.app.root
+        r.clipboard_clear()
+        r.clipboard_append(text)
+        r.update()
+
+    def set_text(self, text):
+        self.cur = text
+        sp, ns = count_chars(text)
+        fl = first_line(text)
+        fl = fl[:22] + ("…" if len(fl) > 22 else "")
+        self.info.config(text=f"불러온 글  {sp:,}자 (공백 제외 {ns:,}자)   ·   첫 줄: {fl}")
+        self.show_repeats()
+
+    def load(self, quiet=False):
+        t = self.read_clip()
+        if not t.strip():
+            self.info.config(text="복사한 글이 없어요. 한글에서 원고를 복사해 주세요")
+            self.orig = self.cur = ""
+            self.rep_lb.delete(0, "end")
+            return
+        self.orig = t
+        self.set_text(t)
+        if not quiet:
+            self.msg.config(text="불러왔어요", fg=C_TYPING)
+
+    def do_tidy(self):
+        if not self.orig:
+            self.load()
+            if not self.orig:
+                return
+        new = tidy_text(self.orig, self.opts())
+        self.write_clip(new)
+        self.set_text(new)
+        self.app.save_all()
+        self.msg.config(text="정리해서 복사했어요! 한글에서 Ctrl+A 한 뒤 Ctrl+V 로 붙여 넣어 주세요", fg=C_TYPING)
+
+    def revert(self):
+        if not self.orig:
+            return
+        self.write_clip(self.orig)
+        self.set_text(self.orig)
+        self.msg.config(text="원래 글을 다시 복사해 뒀어요", fg=C_TYPING)
+
+    def show_repeats(self):
+        lb = self.rep_lb
+        lb.delete(0, "end")
+        if not self.cur:
+            return
+        words, pairs = find_repeats(self.cur)
+        if self.v_rep.get() == "word":
+            for wd, n, forms in words[:60]:
+                ex = " · ".join(f"{t} {c}" for t, c in forms if t != wd) if len(forms) > 1 or forms[0][0] != wd else ""
+                lb.insert("end", f"{wd}   {n}번" + (f"   ({ex})" if ex else ""))
+            if not words:
+                lb.insert("end", "(세 번 넘게 나온 단어가 없어요)")
+        else:
+            for ph, n in pairs[:60]:
+                lb.insert("end", f"{ph}   {n}번")
+            if not pairs:
+                lb.insert("end", "(겹치는 표현이 없어요)")
+
+    def refresh_pieces(self):
+        app = self.app
+        b = app.set.get("char_basis", "sp")
+        lb = self.pc_lb
+        lb.delete(0, "end")
+        pieces = app.td.get("pieces", [])
+        for p in pieces:
+            extra = ""
+            if p.get("total_" + b, 0) != p.get(b, 0):
+                extra = f"   (전체 {int(p.get('total_' + b, 0)):,}자 중 오늘 늘어난 만큼)"
+            lb.insert("end", f"{p.get('head') or p.get('key')}   {int(p.get(b, 0)):,}자{extra}")
+        if not pieces:
+            lb.insert("end", "(아직 더한 글이 없어요)")
+        self.total.config(text=f"합계 {app.day_chars(app.td):,}자  ·  {app.basis_name()}")
+
+    def add(self):
+        if not self.cur:
+            self.load()
+            if not self.cur:
+                return
+        r = self.app.add_piece(self.cur)
+        if not r:
+            self.msg2.config(text="글이 비어 있어요", fg=C_PAUSE)
+            return
+        kind, rec, before = r
+        b = self.app.set.get("char_basis", "sp")
+        now = int(rec[b])
+        name = rec["head"][:14]
+        if kind == "update":
+            t = f"같은 화라서 새 글자 수로 바꿨어요: 「{name}」 {before:,} → {now:,}자"
+        elif kind == "cont":
+            t = f"전에 쓰던 화라서 늘어난 만큼만 더했어요: 「{name}」 +{now:,}자"
+        else:
+            t = f"더했어요: 「{name}」 {now:,}자"
+        self.msg2.config(text=t, fg=C_TYPING)
+        self.refresh_pieces()
+
+    def remove(self):
+        sel = self.pc_lb.curselection()
+        if not sel or not self.app.td.get("pieces"):
+            self.msg2.config(text="뺄 글을 목록에서 먼저 골라 주세요", fg=C_PAUSE)
+            return
+        self.app.remove_piece(sel[0])
+        self.msg2.config(text="뺐어요", fg=C_TYPING)
+        self.refresh_pieces()
+
+    def close(self):
+        self.opts()
+        self.app.save_all()
         self.win.destroy()
 
 
@@ -1333,6 +1818,23 @@ class WindowPicker:
 
 
 # ══ 자동 점검 (만들 때 깃허브에서 돌림) ═══════════════
+SAMPLE_TEXT = '12화. 비 오는 밤\n\n\n"왜 이제 왔어..."  그가 물었다.   \n\'괜찮아\' 하고 고개를 끄덕였다......\n고개를 들었다. 고개가 아팠다. 고개는 무거웠다.'
+
+
+def text_checks():
+    t = tidy_text(SAMPLE_TEXT, {"blank": "remove", "quotes": True, "ellipsis": True, "ellipsis_to": "…", "trim": True})
+    words, _ = find_repeats(SAMPLE_TEXT)
+    return {
+        "quotes": "“왜 이제 왔어…” 그가 물었다." in t,
+        "single_quotes": "‘괜찮아’ 하고" in t,
+        "ellipsis": "끄덕였다…" in t,
+        "blank_removed": "\n\n" not in t,
+        "count": count_chars("가 나\n다") == (4, 3),
+        "repeat_stem": bool(words) and words[0][0] == "고개" and words[0][1] == 4,
+        "add_blank": tidy_text("a\n\n\nb\nc", {"blank": "add"}) == "a\n\nb\n\nc",
+    }
+
+
 def run_selftest(root, app):
     from tkinter import font as tkfont
     report = {"version": APP_VER, "frozen": bool(getattr(sys, "frozen", False)), "data_dir": str(DATA_DIR)}
@@ -1345,6 +1847,15 @@ def run_selftest(root, app):
             app.open_stats()
             root.update()
             WindowPicker(app._last_sw)
+            root.clipboard_clear()
+            root.clipboard_append(SAMPLE_TEXT)
+            app.open_tidy()
+            tw = app._last_tidy
+            tw.do_tidy()
+            tw.add()
+            report["tidy_result"] = root.clipboard_get()
+            report["chars_today"] = app.day_chars(app.td)
+            tw.close()
             app.toggle_mini()
             app.toggle_mini()
         except Exception:
@@ -1363,6 +1874,9 @@ def run_selftest(root, app):
             report["windows"] = len(list_windows())
             report["is_target_hwp"] = app.is_target(1, "1화.hwp - 한글", "Hwp.exe")
             report["is_target_chrome"] = app.is_target(1, "유튜브 - Chrome", "chrome.exe")
+            report["text_checks"] = text_checks()
+            if not all(report["text_checks"].values()):
+                errors.append("원고 정리 계산이 틀림")
             report["errors"] = errors + app.errors
             if IS_WIN:  # 윈도우에서는 이것들이 꼭 돼야 함
                 if not report["ramil_font_found"]:
@@ -1398,6 +1912,12 @@ if __name__ == "__main__":
         root.after(300, app.open_stats)
     elif o == "settings":
         root.after(300, app.open_settings)
+    elif o == "tidy":
+        def _tidy():
+            root.clipboard_clear()
+            root.clipboard_append(SAMPLE_TEXT * 3)
+            app.open_tidy()
+        root.after(300, _tidy)
     elif o == "picker":
         root.after(300, lambda: (app.open_settings(), root.after(300, lambda: WindowPicker(app._last_sw))))
     root.mainloop()

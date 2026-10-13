@@ -14,7 +14,7 @@ import datetime as dt
 from pathlib import Path
 
 APP_NAME = "마감의 숲 집필 타이머"
-APP_VER = "1.1.0"
+APP_VER = "1.1.1"
 IS_WIN = sys.platform.startswith("win")
 
 # ── 경로 ─────────────────────────────────────────────
@@ -1497,13 +1497,16 @@ class TidyWindow:
         app.tidy_win = w
         app._last_tidy = self
         w.title("원고 정리")
-        w.configure(bg=self.BG, padx=S(18), pady=S(14))
+        w.configure(bg=self.BG, padx=S(28), pady=S(22))
         w.resizable(False, False)
         w.attributes("-topmost", bool(app.set.get("topmost", True)))
-        w.geometry(app.child_pos(560))
-        self.f = f = (app.f_ko, 11) if app.round else (app.f_ko, 9)
-        self.fb = fb = (app.f_ko, 13) if app.round else (app.f_ko, 10, "bold")
-        self.fs = fs = (app.f_ko, 10) if app.round else (app.f_ko, 8)
+        w.geometry(app.child_pos(720))
+        # 원고 창은 글씨를 크게 (라밀: 빽빽하고 잘 안 보임)
+        self.f = f = (app.f_ko, 13) if app.round else (app.f_ko, 11)
+        self.fb = fb = (app.f_ko, 17) if app.round else (app.f_ko, 13, "bold")
+        self.fs = fs = (app.f_ko, 12) if app.round else (app.f_ko, 10)
+        self.fl = fl = (app.f_ko, 13) if app.round else (app.f_ko, 11)  # 목록 글씨
+        HINT = "#c4b5bc"
         self.orig = ""
         self.cur = ""
         to = app.set.get("tidy", {})
@@ -1516,82 +1519,93 @@ class TidyWindow:
         tk.Label(top, text="원고 정리", font=fb, fg=C_TEXT, **lab).pack(side="left")
         self.button(top, "복사한 글 불러오기", self.load, gold=True).pack(side="right")
         tk.Label(w, text="한글에서 Ctrl+A → Ctrl+C 로 원고를 복사한 뒤 '복사한 글 불러오기'를 눌러 주세요",
-                 font=fs, fg=C_MUTED, **lab).grid(row=1, column=0, columnspan=3, sticky="w")
+                 font=fs, fg=HINT, **lab).grid(row=1, column=0, columnspan=3, sticky="w", pady=(S(6), 0))
         self.info = tk.Label(w, text="", font=f, fg=C_GOLD, anchor="w", justify="left", **lab)
-        self.info.grid(row=2, column=0, columnspan=3, sticky="w", pady=(S(6), S(4)))
+        self.info.grid(row=2, column=0, columnspan=3, sticky="w", pady=(S(10), S(12)))
 
         # 왼쪽: 정리하기
         left = tk.Frame(w, **lab)
         left.grid(row=3, column=0, sticky="nw")
-        tk.Frame(w, bg="#3a3038", width=1).grid(row=3, column=1, sticky="ns", padx=S(14))
+        tk.Frame(w, bg="#3a3038", width=1).grid(row=3, column=1, sticky="ns", padx=S(24))
         right = tk.Frame(w, **lab)
         right.grid(row=3, column=2, sticky="nw")
 
         tk.Label(left, text="정리하기", font=fb, fg=C_TEXT, **lab).pack(anchor="w")
-        tk.Label(left, text="빈 줄", font=f, fg=C_SUB, **lab).pack(anchor="w", pady=(S(4), 0))
+        tk.Label(left, text="빈 줄", font=f, fg=C_SUB, **lab).pack(anchor="w", pady=(S(10), S(2)))
         self.v_blank = tk.StringVar(value=to.get("blank", "keep"))
         rb = dict(cb)
         for val, txt in (("keep", "그대로 두기"), ("remove", "빈 줄 모두 빼기"), ("add", "문단 사이에 빈 줄 한 줄씩")):
-            tk.Radiobutton(left, text=txt, variable=self.v_blank, value=val, **rb).pack(anchor="w", padx=(S(8), 0))
+            tk.Radiobutton(left, text=txt, variable=self.v_blank, value=val, **rb).pack(anchor="w", padx=(S(10), 0),
+                                                                                       pady=S(2))
         self.v_quotes = tk.BooleanVar(value=to.get("quotes", True))
         self.v_ell = tk.BooleanVar(value=to.get("ellipsis", True))
         self.v_ell_to = tk.StringVar(value=to.get("ellipsis_to", "…"))
         self.v_trim = tk.BooleanVar(value=to.get("trim", True))
         tk.Checkbutton(left, text='둥근 따옴표로 바꾸기  ( "말" → “말” )', variable=self.v_quotes, **cb).pack(
-            anchor="w", pady=(S(8), 0))
+            anchor="w", pady=(S(16), S(3)))
         er = tk.Frame(left, **lab)
-        er.pack(anchor="w")
+        er.pack(anchor="w", pady=S(3))
         tk.Checkbutton(er, text="말줄임표 통일 →", variable=self.v_ell, **cb).pack(side="left")
         om = tk.OptionMenu(er, self.v_ell_to, "…", "……", "...")
         om.config(font=f, bg=self.FIELD, fg=C_TEXT, activebackground="#3a3038", activeforeground=C_TEXT,
-                  relief="flat", highlightthickness=0, width=4)
+                  relief="flat", highlightthickness=0, width=5)
         om["menu"].config(font=f, bg=self.FIELD, fg=C_TEXT)
         om.pack(side="left", padx=(S(6), 0))
-        tk.Checkbutton(left, text="줄 끝 공백 · 겹친 띄어쓰기 정리", variable=self.v_trim, **cb).pack(anchor="w")
+        tk.Checkbutton(left, text="줄 끝 공백 · 겹친 띄어쓰기 정리", variable=self.v_trim, **cb).pack(anchor="w", pady=S(3))
         bf = tk.Frame(left, **lab)
-        bf.pack(anchor="w", pady=(S(10), 0))
+        bf.pack(anchor="w", pady=(S(20), 0))
         self.button(bf, "정리해서 복사", self.do_tidy, gold=True).pack(side="left")
-        self.button(bf, "원래 글로 되돌리기", self.revert).pack(side="left", padx=(S(6), 0))
-        self.msg = tk.Label(left, text="", font=fs, fg=C_TYPING, anchor="w", justify="left", wraplength=S(300), **lab)
-        self.msg.pack(anchor="w", pady=(S(6), 0))
+        self.button(bf, "원래 글로 되돌리기", self.revert).pack(side="left", padx=(S(8), 0))
+        self.msg = tk.Label(left, text="", font=fs, fg=C_TYPING, anchor="w", justify="left", wraplength=S(340), **lab)
+        self.msg.pack(anchor="w", pady=(S(10), 0))
 
         # 오른쪽: 반복 단어
         tk.Label(right, text="반복 단어", font=fb, fg=C_TEXT, **lab).pack(anchor="w")
         rr = tk.Frame(right, **lab)
-        rr.pack(anchor="w", pady=(S(2), S(4)))
+        rr.pack(anchor="w", pady=(S(8), S(8)))
         self.v_rep = tk.StringVar(value="word")
         tk.Radiobutton(rr, text="단어", variable=self.v_rep, value="word", command=self.show_repeats, **rb).pack(side="left")
         tk.Radiobutton(rr, text="두 단어 표현", variable=self.v_rep, value="pair", command=self.show_repeats,
                        **rb).pack(side="left", padx=(S(10), 0))
-        self.rep_lb = tk.Listbox(right, height=11, width=34, font=fs, bg=self.FIELD, fg=C_TEXT, relief="flat",
-                                 highlightthickness=0, selectbackground="#4a3d44", activestyle="none")
-        self.rep_lb.pack(anchor="w")
-        tk.Label(right, text="조사만 다른 말(고개를·고개가)은 하나로 묶어요", font=fs, fg=C_MUTED, **lab).pack(anchor="w")
+        self.rep_lb = self.boxed_list(right, height=12, width=36)
+        tk.Label(right, text="조사만 다른 말(고개를·고개가)은 하나로 묶어요", font=fs, fg=HINT, **lab).pack(
+            anchor="w", pady=(S(8), 0))
 
         # 아래: 오늘 쓴 글
-        tk.Frame(w, bg="#3a3038", height=1).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(S(12), S(8)))
+        tk.Frame(w, bg="#3a3038", height=1).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(S(22), S(16)))
         bot = tk.Frame(w, **lab)
         bot.grid(row=5, column=0, columnspan=3, sticky="ew")
         head = tk.Frame(bot, **lab)
         head.pack(fill="x")
         tk.Label(head, text="오늘 쓴 글", font=fb, fg=C_TEXT, **lab).pack(side="left")
         self.total = tk.Label(head, text="", font=f, fg=C_GOLD, **lab)
-        self.total.pack(side="left", padx=(S(10), 0))
+        self.total.pack(side="left", padx=(S(14), 0))
         self.button(head, "빼기", self.remove).pack(side="right")
-        self.button(head, "오늘 쓴 글로 더하기", self.add, gold=True).pack(side="right", padx=(0, S(6)))
-        self.pc_lb = tk.Listbox(bot, height=4, font=fs, bg=self.FIELD, fg=C_TEXT, relief="flat",
-                                highlightthickness=0, selectbackground="#4a3d44", activestyle="none")
-        self.pc_lb.pack(fill="x", pady=(S(6), 0))
+        self.button(head, "오늘 쓴 글로 더하기", self.add, gold=True).pack(side="right", padx=(0, S(8)))
+        self.pc_lb = self.boxed_list(bot, height=4, fill=True, top=S(10))
         self.msg2 = tk.Label(bot, text="같은 화를 고쳐서 다시 더하면 두 번 세지 않고 새 글자 수로 바꿔요 (첫 줄로 알아봐요)",
-                             font=fs, fg=C_MUTED, anchor="w", **lab)
-        self.msg2.pack(anchor="w", pady=(S(4), 0))
+                             font=fs, fg=HINT, anchor="w", **lab)
+        self.msg2.pack(anchor="w", pady=(S(8), 0))
         w.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh_pieces()
         self.load(quiet=True)
 
+    def boxed_list(self, parent, height, width=None, fill=False, top=0):
+        """목록 둘레에 여백을 둬서 덜 빽빽하게"""
+        S = self.app.S
+        box = tk.Frame(parent, bg=self.FIELD, padx=S(12), pady=S(10))
+        box.pack(anchor="w", fill="x" if fill else None, pady=(top, 0))
+        kw = dict(height=height, font=self.fl, bg=self.FIELD, fg="#f3e7da", relief="flat", bd=0,
+                  highlightthickness=0, selectbackground="#5a4a52", selectforeground="#fff6ea", activestyle="none")
+        if width:
+            kw["width"] = width
+        lb = tk.Listbox(box, **kw)
+        lb.pack(fill="both", expand=True)
+        return lb
+
     def button(self, parent, text, cmd, gold=False):
         kw = dict(text=text, font=self.fb if gold and self.app.round else self.f, command=cmd, relief="flat",
-                  bd=0, padx=self.app.S(10), pady=self.app.S(3), cursor="hand2")
+                  bd=0, padx=self.app.S(14), pady=self.app.S(5), cursor="hand2")
         if gold:
             kw.update(bg=C_GOLD, fg="#3a2a1c", activebackground="#ffe2a3", activeforeground="#3a2a1c")
         else:

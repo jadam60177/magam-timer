@@ -14,7 +14,7 @@ import datetime as dt
 from pathlib import Path
 
 APP_NAME = "마감의 숲 집필 타이머"
-APP_VER = "1.1.1"
+APP_VER = "1.1.2"
 IS_WIN = sys.platform.startswith("win")
 
 # ── 경로 ─────────────────────────────────────────────
@@ -1067,15 +1067,26 @@ class TimerApp:
         self.refresh()
 
     def reset_today(self):
-        if not messagebox.askyesno(APP_NAME, "오늘 기록을 0으로 되돌릴까요?", parent=self.root):
+        if getattr(self, "_reset_win", None) and self._reset_win.winfo_exists():
+            self._reset_win.lift()
             return
+        ResetDialog(self)
+
+    def do_reset(self, what):
+        """what: time / chars / all"""
         d = self.td
-        d["sec"] = 0.0
-        d["goal_done"] = False
-        self.last_key_time = 0.0
-        self.is_typing = False
+        if what in ("time", "all"):
+            d["sec"] = 0.0
+            d["goal_done"] = False
+            self.last_key_time = 0.0
+            self.is_typing = False
+        if what in ("chars", "all"):
+            d["pieces"] = []
+            d["chars_goal_done"] = False
         self.save_all()
         self.refresh()
+        if self.tidy_win and self.tidy_win.winfo_exists() and getattr(self, "_last_tidy", None):
+            self._last_tidy.refresh_pieces()
 
     def on_close(self):
         self.remember_pos()
@@ -1129,6 +1140,50 @@ class TimerApp:
             self.build_layout()
         if os.environ.get("TIMER_TOAST"):
             self.show_toast(os.environ["TIMER_TOAST"], 999)
+
+
+# ══ 초기화 고르기 ═════════════════════════════════════
+class ResetDialog:
+    BG = "#1d1820"
+
+    def __init__(self, app):
+        self.app = app
+        S = app.S
+        w = tk.Toplevel(app.root)
+        self.win = w
+        app._reset_win = w
+        w.title("초기화")
+        w.configure(bg=self.BG, padx=S(26), pady=S(22))
+        w.resizable(False, False)
+        w.attributes("-topmost", True)
+        w.transient(app.root)
+        f = (app.f_ko, 13) if app.round else (app.f_ko, 11)
+        fb = (app.f_ko, 17) if app.round else (app.f_ko, 13, "bold")
+        fs = (app.f_ko, 12) if app.round else (app.f_ko, 10)
+        d = app.td
+        tk.Label(w, text="오늘 기록에서 무엇을 0으로 되돌릴까요?", font=fb, bg=self.BG, fg=C_TEXT).pack(anchor="w")
+        tk.Label(w, text=f"지금 오늘 기록: {fmt_hm(d['sec'])} · {fmt_chars(app.day_chars(d))}", font=fs,
+                 bg=self.BG, fg="#c4b5bc").pack(anchor="w", pady=(S(6), S(16)))
+        for label, what, gold in (("시간만", "time", False), ("오늘 쓴 글(글자 수)만", "chars", False),
+                                  ("모두 다 (시간 + 글자 수)", "all", True)):
+            kw = dict(text=label, font=fb if gold and app.round else f, relief="flat", bd=0, cursor="hand2",
+                      padx=S(16), pady=S(7), anchor="w", command=lambda x=what: self.pick(x))
+            if gold:
+                kw.update(bg=C_GOLD, fg="#3a2a1c", activebackground="#ffe2a3", activeforeground="#3a2a1c")
+            else:
+                kw.update(bg="#3a3038", fg=C_TEXT, activebackground="#4a3d44", activeforeground=C_TEXT)
+            tk.Button(w, **kw).pack(fill="x", pady=S(4))
+        tk.Button(w, text="닫기", font=f, relief="flat", bd=0, cursor="hand2", padx=S(16), pady=S(5),
+                  bg=self.BG, fg="#c4b5bc", activebackground=self.BG, activeforeground=C_TEXT,
+                  command=w.destroy).pack(anchor="e", pady=(S(12), 0))
+        w.update_idletasks()
+        w.geometry(app.child_pos(300))
+
+    def pick(self, what):
+        self.app.do_reset(what)
+        self.win.destroy()
+        self.app.show_toast({"time": "오늘 시간을 0으로 되돌렸어요", "chars": "오늘 쓴 글을 비웠어요",
+                             "all": "오늘 기록을 모두 비웠어요"}[what], 5)
 
 
 # ══ 통계 창 ═══════════════════════════════════════════
@@ -1870,6 +1925,11 @@ def run_selftest(root, app):
             report["tidy_result"] = root.clipboard_get()
             report["chars_today"] = app.day_chars(app.td)
             tw.close()
+            app.reset_today()
+            app._reset_win.destroy()
+            app.do_reset("all")
+            if app.day_chars(app.td) or app.td["sec"]:
+                errors.append("초기화가 안 됨")
             app.toggle_mini()
             app.toggle_mini()
         except Exception:
@@ -1926,6 +1986,8 @@ if __name__ == "__main__":
         root.after(300, app.open_stats)
     elif o == "settings":
         root.after(300, app.open_settings)
+    elif o == "reset":
+        root.after(300, app.reset_today)
     elif o == "tidy":
         def _tidy():
             root.clipboard_clear()

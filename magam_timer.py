@@ -14,7 +14,7 @@ import datetime as dt
 from pathlib import Path
 
 APP_NAME = "마감의 숲 집필 타이머"
-APP_VER = "1.1.3"
+APP_VER = "1.1.4"
 IS_WIN = sys.platform.startswith("win")
 
 # ── 경로 ─────────────────────────────────────────────
@@ -477,6 +477,9 @@ class TimerApp:
         self.f_ko = pick_font(root, ["RamilRound", "Malgun Gothic", "맑은 고딕", "Noto Sans CJK KR",
                                      "NanumGothic", "minikr", "TkDefaultFont"])
         self.round = self.f_ko.lower() == "ramilround"
+        # 원고 창처럼 글을 많이 읽는 곳은 깔끔한 글꼴
+        self.f_clean = pick_font(root, ["Malgun Gothic", "맑은 고딕", "Noto Sans CJK KR", "NanumGothic",
+                                        "minikr", "TkDefaultFont"])
 
         first_run = not SET_FILE.exists()
         self.set = json.loads(json.dumps(DEFAULTS))
@@ -552,7 +555,7 @@ class TimerApp:
         return sum(int(p.get(b, 0)) for p in d.get("pieces", []))
 
     def add_piece(self, text):
-        """오늘 쓴 글로 더하기. 같은 화(첫 줄이 같은 글)는 새 글자 수로 바꾸고,
+        """오늘 작업한 글자 수에 더하기. 같은 화(첫 줄이 같은 글)는 새 글자 수로 바꾸고,
         전날 쓰던 화면 늘어난 만큼만 더함"""
         sp, ns = count_chars(text)
         key = piece_key(text)
@@ -832,12 +835,13 @@ class TimerApp:
                x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
         return self.canvas.create_polygon(pts, smooth=True, **kw)
 
-    def pill(self, cx, cy, w, h, label, cmd, size=9):
+    def pill(self, cx, cy, w, h, label, cmd, size=9, extra=()):
         tag = f"pill{id(cmd)}{cx}{cy}"
         bgid = self.round_rect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2, h / 2,
-                               fill=self.P["pill"], outline=self.P["pill_line"], width=max(1, self.S(1)), tags=(tag,))
+                               fill=self.P["pill"], outline=self.P["pill_line"], width=max(1, self.S(1)),
+                               tags=(tag,) + tuple(extra))
         tid = self.canvas.create_text(self.S(cx), self.S(cy), text=label, font=(self.f_ko, size),
-                                      fill=self.P["text"], tags=(tag,))
+                                      fill=self.P["text"], tags=(tag,) + tuple(extra))
         self.canvas.tag_bind(tag, "<Enter>", lambda e: (self.canvas.itemconfigure(bgid, fill=self.P["pill_hover"]),
                                                         self.canvas.config(cursor="hand2")))
         self.canvas.tag_bind(tag, "<Leave>", lambda e: (self.canvas.itemconfigure(bgid, fill=self.P["pill"]),
@@ -848,6 +852,7 @@ class TimerApp:
 
     def build_layout(self):
         c = self.canvas
+        self.hide_reset_menu()
         c.delete("all")
         self.fade = None
         self.cur_phase = self.wanted_phase()
@@ -1067,10 +1072,40 @@ class TimerApp:
         self.refresh()
 
     def reset_today(self):
-        if getattr(self, "_reset_win", None) and self._reset_win.winfo_exists():
-            self._reset_win.lift()
+        """초기화 버튼 바로 위에 [시간] [원고] [모두] 작은 팝업"""
+        c = self.canvas
+        if c.find_withtag("resetmenu"):
+            self.hide_reset_menu()
             return
-        ResetDialog(self)
+        if self.set.get("mini"):
+            return
+        w, _ = self.size()
+        cx, cy = w / 2 + 58, 183  # 초기화 버튼(227) 위
+        pw, ph = 236, 46
+        self.round_rect(cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2, 16, fill=self.P["pill"],
+                        outline=C_GOLD, width=max(1, self.S(1)), tags=("resetmenu",))
+        tri = [self.S(v) for v in (cx - 8, cy + ph / 2 - 1, cx + 8, cy + ph / 2 - 1, cx, cy + ph / 2 + 8)]
+        c.create_polygon(tri, fill=self.P["pill"], outline="", tags=("resetmenu",))
+        for i, (label, what) in enumerate((("시간", "time"), ("원고", "chars"), ("모두", "all"))):
+            self.pill(cx - 74 + i * 74, cy, 64, 30, label, lambda x=what: self.pick_reset(x), 12,
+                      extra=("resetmenu",))
+        self._reset_after = self.root.after(6000, self.hide_reset_menu)
+
+    def hide_reset_menu(self):
+        self.canvas.delete("resetmenu")
+        self.canvas.config(cursor="")
+        if getattr(self, "_reset_after", None):
+            try:
+                self.root.after_cancel(self._reset_after)
+            except Exception:
+                pass
+            self._reset_after = None
+
+    def pick_reset(self, what):
+        self.hide_reset_menu()
+        self.do_reset(what)
+        self.show_toast({"time": "오늘 시간을 0으로 되돌렸어요", "chars": "오늘 작업한 글자 수를 비웠어요",
+                         "all": "오늘 기록을 모두 비웠어요"}[what], 5)
 
     def do_reset(self, what):
         """what: time / chars / all"""
@@ -1147,50 +1182,6 @@ class TimerApp:
             self.build_layout()
         if os.environ.get("TIMER_TOAST"):
             self.show_toast(os.environ["TIMER_TOAST"], 999)
-
-
-# ══ 초기화 고르기 ═════════════════════════════════════
-class ResetDialog:
-    BG = "#1d1820"
-
-    def __init__(self, app):
-        self.app = app
-        S = app.S
-        w = tk.Toplevel(app.root)
-        self.win = w
-        app._reset_win = w
-        w.title("초기화")
-        w.configure(bg=self.BG, padx=S(26), pady=S(22))
-        w.resizable(False, False)
-        w.attributes("-topmost", True)
-        w.transient(app.root)
-        f = (app.f_ko, 13) if app.round else (app.f_ko, 11)
-        fb = (app.f_ko, 17) if app.round else (app.f_ko, 13, "bold")
-        fs = (app.f_ko, 12) if app.round else (app.f_ko, 10)
-        d = app.td
-        tk.Label(w, text="오늘 기록에서 무엇을 0으로 되돌릴까요?", font=fb, bg=self.BG, fg=C_TEXT).pack(anchor="w")
-        tk.Label(w, text=f"지금 오늘 기록: {fmt_hm(d['sec'])} · {fmt_chars(app.day_chars(d))}", font=fs,
-                 bg=self.BG, fg="#c4b5bc").pack(anchor="w", pady=(S(6), S(16)))
-        for label, what, gold in (("시간만", "time", False), ("오늘 쓴 글(글자 수)만", "chars", False),
-                                  ("모두 다 (시간 + 글자 수)", "all", True)):
-            kw = dict(text=label, font=fb if gold and app.round else f, relief="flat", bd=0, cursor="hand2",
-                      padx=S(16), pady=S(7), anchor="w", command=lambda x=what: self.pick(x))
-            if gold:
-                kw.update(bg=C_GOLD, fg="#3a2a1c", activebackground="#ffe2a3", activeforeground="#3a2a1c")
-            else:
-                kw.update(bg="#3a3038", fg=C_TEXT, activebackground="#4a3d44", activeforeground=C_TEXT)
-            tk.Button(w, **kw).pack(fill="x", pady=S(4))
-        tk.Button(w, text="닫기", font=f, relief="flat", bd=0, cursor="hand2", padx=S(16), pady=S(5),
-                  bg=self.BG, fg="#c4b5bc", activebackground=self.BG, activeforeground=C_TEXT,
-                  command=w.destroy).pack(anchor="e", pady=(S(12), 0))
-        w.update_idletasks()
-        w.geometry(app.child_pos(300))
-
-    def pick(self, what):
-        self.app.do_reset(what)
-        self.win.destroy()
-        self.app.show_toast({"time": "오늘 시간을 0으로 되돌렸어요", "chars": "오늘 쓴 글을 비웠어요",
-                             "all": "오늘 기록을 모두 비웠어요"}[what], 5)
 
 
 # ══ 통계 창 ═══════════════════════════════════════════
@@ -1334,7 +1325,7 @@ class StatsWindow:
             if g > 0:
                 s += f" · 목표 달성 {sum(1 for v in vals if v >= g)}일"
         elif self.metric == "chars":
-            s = "원고 창에서 '오늘 쓴 글로 더하기'를 누르면 글자 수가 쌓여요!"
+            s = "원고 창에서 '오늘 작업한 글자 수'의 '더하기'를 누르면 쌓여요!"
         else:
             s = "아직 기록이 없어요. 고른 프로그램에서 글을 쓰면 쌓여요!"
         self.t(self.W / 2, y0 + 248, s, 8, C_SUB)
@@ -1563,11 +1554,12 @@ class TidyWindow:
         w.resizable(False, False)
         w.attributes("-topmost", bool(app.set.get("topmost", True)))
         w.geometry(app.child_pos(720))
-        # 원고 창은 글씨를 크게 (라밀: 빽빽하고 잘 안 보임)
-        self.f = f = (app.f_ko, 13) if app.round else (app.f_ko, 11)
-        self.fb = fb = (app.f_ko, 17) if app.round else (app.f_ko, 13, "bold")
-        self.fs = fs = (app.f_ko, 12) if app.round else (app.f_ko, 10)
-        self.fl = fl = (app.f_ko, 13) if app.round else (app.f_ko, 11)  # 목록 글씨
+        # 원고 창은 깔끔한 글꼴 + 큰 글씨 (라밀: 빽빽하고 잘 안 보임, 둥근 글꼴은 읽기 힘듦)
+        fc = app.f_clean
+        self.f = f = (fc, 11)
+        self.fb = fb = (fc, 14, "bold")
+        self.fs = fs = (fc, 10)
+        self.fl = fl = (fc, 11)  # 목록 글씨
         HINT = "#c4b5bc"
         self.orig = ""
         self.cur = ""
@@ -1629,21 +1621,21 @@ class TidyWindow:
         tk.Radiobutton(rr, text="단어", variable=self.v_rep, value="word", command=self.show_repeats, **rb).pack(side="left")
         tk.Radiobutton(rr, text="두 단어 표현", variable=self.v_rep, value="pair", command=self.show_repeats,
                        **rb).pack(side="left", padx=(S(10), 0))
-        self.rep_lb = self.boxed_list(right, height=12, width=36)
+        self.rep_lb = self.boxed_list(right, height=12, width=42)
         tk.Label(right, text="조사만 다른 말(고개를·고개가)은 하나로 묶어요", font=fs, fg=HINT, **lab).pack(
             anchor="w", pady=(S(8), 0))
 
-        # 아래: 오늘 쓴 글
+        # 아래: 오늘 작업한 글자 수
         tk.Frame(w, bg="#3a3038", height=1).grid(row=4, column=0, columnspan=3, sticky="ew", pady=(S(22), S(16)))
         bot = tk.Frame(w, **lab)
         bot.grid(row=5, column=0, columnspan=3, sticky="ew")
         head = tk.Frame(bot, **lab)
         head.pack(fill="x")
-        tk.Label(head, text="오늘 쓴 글", font=fb, fg=C_TEXT, **lab).pack(side="left")
+        tk.Label(head, text="오늘 작업한 글자 수", font=fb, fg=C_TEXT, **lab).pack(side="left")
         self.total = tk.Label(head, text="", font=f, fg=C_GOLD, **lab)
         self.total.pack(side="left", padx=(S(14), 0))
-        self.button(head, "빼기", self.remove).pack(side="right")
-        self.button(head, "오늘 쓴 글로 더하기", self.add, gold=True).pack(side="right", padx=(0, S(8)))
+        self.button(head, "제거하기", self.remove).pack(side="right")
+        self.button(head, "더하기", self.add, gold=True).pack(side="right", padx=(0, S(8)))
         self.pc_lb = self.boxed_list(bot, height=4, fill=True, top=S(10))
         self.msg2 = tk.Label(bot, text="같은 화를 고쳐서 다시 더하면 두 번 세지 않고 새 글자 수로 바꿔요 (첫 줄로 알아봐요)",
                              font=fs, fg=HINT, anchor="w", **lab)
@@ -1666,8 +1658,8 @@ class TidyWindow:
         return lb
 
     def button(self, parent, text, cmd, gold=False):
-        kw = dict(text=text, font=self.fb if gold and self.app.round else self.f, command=cmd, relief="flat",
-                  bd=0, padx=self.app.S(14), pady=self.app.S(5), cursor="hand2")
+        kw = dict(text=text, font=(self.app.f_clean, 11, "bold") if gold else self.f, command=cmd, relief="flat",
+                  bd=0, padx=self.app.S(14), pady=self.app.S(6), cursor="hand2")
         if gold:
             kw.update(bg=C_GOLD, fg="#3a2a1c", activebackground="#ffe2a3", activeforeground="#3a2a1c")
         else:
@@ -1771,8 +1763,8 @@ class TidyWindow:
                 extra = f"   (전체 {int(p.get('total_' + b, 0)):,}자 중 오늘 늘어난 만큼)"
             lb.insert("end", f"{p.get('head') or p.get('key')}   {int(p.get(b, 0)):,}자{extra}")
         if not pieces:
-            lb.insert("end", "(아직 더한 글이 없어요)")
-        self.total.config(text=f"합계 {app.day_chars(app.td):,}자  ·  {app.basis_name()}")
+            lb.insert("end", "(아직 더한 글이 없어요. 원고를 불러온 뒤 '더하기'를 눌러 주세요)")
+        self.total.config(text=f"{app.day_chars(app.td):,}자  ({app.basis_name()})")
 
     def add(self):
         if not self.cur:
@@ -1799,10 +1791,10 @@ class TidyWindow:
     def remove(self):
         sel = self.pc_lb.curselection()
         if not sel or not self.app.td.get("pieces"):
-            self.msg2.config(text="뺄 글을 목록에서 먼저 골라 주세요", fg=C_PAUSE)
+            self.msg2.config(text="제거할 글을 목록에서 먼저 골라 주세요", fg=C_PAUSE)
             return
         self.app.remove_piece(sel[0])
-        self.msg2.config(text="뺐어요", fg=C_TYPING)
+        self.msg2.config(text="제거했어요", fg=C_TYPING)
         self.refresh_pieces()
 
     def close(self):
@@ -1947,8 +1939,9 @@ def run_selftest(root, app):
                 errors.append("초기화해도 원고 창이 안 비워짐")
             tw.close()
             app.reset_today()
-            app._reset_win.destroy()
-            app.do_reset("all")
+            if not app.canvas.find_withtag("resetmenu"):
+                errors.append("초기화 팝업이 안 뜸")
+            app.pick_reset("all")
             if app.day_chars(app.td) or app.td["sec"]:
                 errors.append("초기화가 안 됨")
             app.toggle_mini()
